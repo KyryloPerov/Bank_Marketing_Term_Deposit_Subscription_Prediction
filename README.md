@@ -1,5 +1,4 @@
 # Bank_Marketing_Term_Deposit_Subscription_Prediction# 
-Bank Marketing — Term Deposit Subscription Prediction
 
 > **Mid-term project** · Machine Learning course  
 > Binary classification: predict whether a bank client will subscribe to a term deposit.
