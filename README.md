@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/27552623/README.md)
 # Bank_Marketing_Term_Deposit_Subscription_Prediction# 
 Bank Marketing — Term Deposit Subscription Prediction
 
