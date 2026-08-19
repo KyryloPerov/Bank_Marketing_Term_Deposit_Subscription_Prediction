@@ -5,19 +5,31 @@ EDA utility functions for the Bank Marketing mid-term project.
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
+
+
+def _to_binary_target(s: pd.Series) -> pd.Series:
+    """Return the target as 0/1 ints, whether it is numeric or a yes/no string.
+
+    Works across pandas versions (object vs StringDtype) by testing for a
+    numeric dtype rather than for the object dtype specifically.
+    """
+    if is_numeric_dtype(s):
+        return s
+    return (s == "yes").astype(int)
 
 
 def value_counts_of_column(df, column, n=5):
     """Print a formatted top-N value frequency table for a given column."""
-    print(f"______Підрахунок значень колонки '{column}'______\n")
+    print(f"______Value counts for column '{column}'______\n")
 
     value_counts = df[column].value_counts().sort_values(ascending=False).head(n)
     value_counts_norm = (
         df[column].value_counts(normalize=True).sort_values(ascending=False).head(n) * 100
     )
 
-    print(f"Топ {n} значень:\n")
-    print(f"{'Значення':<15} | {'Кількість':>10} | {'Відсоток':>8}")
+    print(f"Top {n} values:\n")
+    print(f"{'Value':<15} | {'Count':>10} | {'Percent':>8}")
     print("-" * 42)
     for value in value_counts.index:
         print(
@@ -81,11 +93,11 @@ def analyze_numeric_vs_target(df, col, target="y"):
     """
     sep = "-" * 42
     print(sep)
-    print(f"  Аналіз: {col}")
+    print(f"  Analysis: {col}")
     print(sep)
 
     # Basic stats
-    print("\nЗагальна статистика:")
+    print("\nDescriptive statistics:")
     print(df[col].describe().to_string())
 
     # IQR / outliers
@@ -95,12 +107,12 @@ def analyze_numeric_vs_target(df, col, target="y"):
     print(f"Outliers: {stats['n_outliers']} ({stats['pct_outliers']:.2f}%)")
 
     # Correlation with target
-    y_num = (df[target] == "yes").astype(int) if df[target].dtype == object else df[target]
+    y_num = _to_binary_target(df[target])
     corr = df[col].corr(y_num)
-    print(f"\nКореляція з таргетом: {corr:.3f}")
+    print(f"\nCorrelation with target: {corr:.3f}")
 
     # Stats per class
-    print("\nСтатистика по класах:")
+    print("\nStatistics per class:")
     print(df.groupby(target)[col].agg(["mean", "median", "std"]).round(3).to_string())
 
     # Plots
@@ -115,7 +127,7 @@ def analyze_numeric_vs_target(df, col, target="y"):
     df_temp = df[[col, target]].copy()
     df_temp["bin"] = pd.qcut(df_temp[col], q=5, duplicates="drop")
     bin_stats = df_temp.groupby("bin", observed=True)[target].apply(
-        lambda x: (x == "yes").mean() if x.dtype == object else x.mean()
+        lambda x: _to_binary_target(x).mean()
     )
     bin_stats.plot(kind="bar", ax=axes[2], color="#4C72B0", edgecolor="white")
     axes[2].set_title(f"P(y=yes) by quantile bins: {col}")
@@ -142,7 +154,7 @@ def analyze_categorical_vs_target(df, col, target="y"):
     """
     sep = "-" * 42
     print(sep)
-    print(f"  Аналіз: {col}")
+    print(f"  Analysis: {col}")
     print(sep)
     print(f"Unique categories: {df[col].nunique()}")
 
@@ -166,12 +178,12 @@ def analyze_categorical_vs_target(df, col, target="y"):
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # 1. Countplot — скільки спостережень у кожній категорії
+    # 1. Countplot — number of observations in each category
     sns.countplot(data=df, x=col, order=vc.index, ax=axes[0])
     axes[0].set_title(f"Count: {col}")
     axes[0].tick_params(axis="x", rotation=45)
 
-    # 2. Normalized distribution by target — як розподілені класи всередині кожної категорії
+    # 2. Normalized distribution by target — how classes are distributed within each category
     percent_df = (
         pd.crosstab(df[col], df[target], normalize="columns") * 100
     ).reset_index()
@@ -182,7 +194,7 @@ def analyze_categorical_vs_target(df, col, target="y"):
     axes[1].set_ylabel("Percent")
     axes[1].tick_params(axis="x", rotation=45)
 
-    # 3. Conversion rate — P(y=yes) для кожної категорії
+    # 3. Conversion rate — P(y=yes) for each category
     conversion.loc[vc.index].plot(kind="bar", ax=axes[2],
                                   color="#4C72B0", edgecolor="white")
     axes[2].set_title(f"P({target}=yes) by {col}")

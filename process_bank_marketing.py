@@ -78,28 +78,6 @@ def _create_contacted_before(df: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=["pdays", "previous"])
 
 
-def _create_period(df: pd.DataFrame) -> pd.DataFrame:
-    """Group months into conversion-rate tiers and drop the raw 'month' column.
-
-    Tiers are based on empirical conversion rates from the full dataset:
-      high_season  — mar(50.5%), sep(44.9%), oct(43.9%), dec(48.9%)  → >40%
-      low_season   — may(6.4%), jul(9.0%)                            → <10%
-      mid_season   — everything else (apr, jun, aug, nov)            → 10–21%
-
-    Note: jan and feb have no observations in this dataset.
-    Note: sep and oct are in 'high_season', NOT 'good_season' —
-          both exceed 40%, the same threshold as mar and dec.
-    """
-    def _tier(m: str) -> str:
-        if m in {"mar", "sep", "oct", "dec"}: return "high_season"
-        if m in {"may", "jul"}:               return "low_season"
-        return "mid_season"
-
-    out = df.copy()
-    out["period"] = out["month"].apply(_tier)
-    return out.drop(columns=["month"])
-
-
 def _encode_education(df: pd.DataFrame) -> pd.DataFrame:
     """Apply ordinal encoding to 'education'.
 
@@ -116,30 +94,44 @@ def _encode_education(df: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=["education"])
 
 
-def _cap_campaign(df: pd.DataFrame) -> pd.DataFrame:
-    """Cap 'campaign' outliers at the 99th percentile.
-
-    The raw column has a long right tail (max = 56, 99th pct ≈ 14).
-    Capping retains 99% of observations unchanged while preventing extreme
-    values from distorting distance-based and linear models.
-    """
-    out = df.copy()
-    cap = out["campaign"].quantile(0.99)
-    out["campaign"] = out["campaign"].clip(upper=cap)
-    return out
-
-
 def _one_hot_encode(df: pd.DataFrame) -> pd.DataFrame:
     """One-hot encode all remaining nominal categorical columns.
+
+    'month' is kept as a plain categorical and one-hot encoded here rather
+    than grouped into target-derived "season" tiers. Grouping months by their
+    conversion rate — computed over the full dataset before the train/val
+    split — leaks validation-set label information into the features, so we
+    let the models learn the monthly (seasonal) signal directly from the OHE
+    columns instead.
 
     drop_first=True removes one dummy per feature to avoid the dummy variable
     trap (perfect multicollinearity), which matters for Logistic Regression.
     """
     nominal_cols = [
         "job", "marital", "default", "housing", "loan", "contact",
-        "poutcome", "age_group", "contacted_before", "period",
+        "poutcome", "age_group", "contacted_before", "month",
     ]
     return pd.get_dummies(df, columns=nominal_cols, drop_first=True)
+
+
+def _cap_campaign_train(
+    X_train: pd.DataFrame,
+    X_val: pd.DataFrame,
+    quantile: float = 0.99,
+) -> tuple:
+    """Cap 'campaign' outliers using a threshold learned on the train set only.
+
+    The raw column has a long right tail (max = 56, 99th pct ≈ 14). The cap is
+    the 99th percentile of the TRAIN split; both train and validation are then
+    clipped to it. Learning the threshold on train only (rather than on the
+    full dataset before the split) keeps the validation set fully unseen.
+    """
+    cap = X_train["campaign"].quantile(quantile)
+    X_train = X_train.copy()
+    X_val = X_val.copy()
+    X_train["campaign"] = X_train["campaign"].clip(upper=cap)
+    X_val["campaign"] = X_val["campaign"].clip(upper=cap)
+    return X_train, X_val, cap
 
 
 def _split_data(
@@ -193,9 +185,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _drop_leaky_columns(df)
     df = _create_age_group(df)
     df = _create_contacted_before(df)
-    df = _create_period(df)
     df = _encode_education(df)
-    df = _cap_campaign(df)
     df = _one_hot_encode(df)
     return df
 
@@ -206,6 +196,12 @@ def prepare_train_val(
     random_state: int = 42,
 ) -> dict:
     """Split the preprocessed dataframe and prepare feature matrices.
+
+    All fit-on-data steps happen AFTER the split and are learned on train only,
+    so no validation information leaks into preprocessing:
+      1. Stratified train/val split.
+      2. 'campaign' outlier cap — threshold = 99th pct of the train split.
+      3. StandardScaler — fit on train, applied to both.
 
     Produces two versions of the features:
       - Unscaled (X_train / X_val)   : for tree-based models.
@@ -223,12 +219,14 @@ def prepare_train_val(
           y_train, y_val        — target Series
           feature_cols          — ordered list of feature column names
           scaler                — fitted StandardScaler instance
+          campaign_cap          — train-derived cap applied to 'campaign'
     """
     feature_cols = [c for c in df_proc.columns if c != TARGET_COL]
     X = df_proc[feature_cols].astype(float)
     y = df_proc[TARGET_COL]
 
     X_train, X_val, y_train, y_val = _split_data(X, y, test_size, random_state)
+    X_train, X_val, campaign_cap = _cap_campaign_train(X_train, X_val)
     X_train_sc, X_val_sc, scaler = _scale_features(X_train, X_val)
 
     return {
@@ -240,4 +238,5 @@ def prepare_train_val(
         "y_val":        y_val,
         "feature_cols": feature_cols,
         "scaler":       scaler,
+        "campaign_cap": campaign_cap,
     }
